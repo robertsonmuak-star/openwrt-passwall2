@@ -1,0 +1,72 @@
+name: Build PassWall2 (Filogic)
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+
+env:
+  PACKAGE_NAME: luci-app-passwall2
+  PACKAGE_REPO: https://github.com/xiaorouji/openwrt-passwall2.git
+  DEPENDS_REPO: https://github.com/xiaorouji/openwrt-passwall-packages.git
+  SDK_URL: https://downloads.openwrt.org/releases/24.10.4/targets/mediatek/filogic/openwrt-sdk-24.10.4-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+  TAG_NAME: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('manual-{0}', github.run_number) }}
+
+jobs:
+
+  build:
+    name: Build PassWall2 for Filogic
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout passwall2 repo
+        uses: actions/checkout@v3
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git wget curl zstd build-essential \
+               libncurses5-dev gawk gettext xsltproc unzip python3
+
+      - name: Download OpenWrt SDK
+        run: |
+          wget -O sdk.tar.zst ${{ env.SDK_URL }}
+          mkdir sdk
+          tar --zstd -xf sdk.tar.zst -C sdk --strip-components=1
+
+      - name: Prepare feeds
+        run: |
+          cd sdk
+          sed -i 's#git.openwrt.org/openwrt/openwrt#github.com/openwrt/openwrt#' feeds.conf.default
+          sed -i 's#git.openwrt.org/feed/packages#github.com/openwrt/packages#' feeds.conf.default
+          sed -i 's#git.openwrt.org/project/luci#github.com/openwrt/luci#' feeds.conf.default
+          sed -i 's#git.openwrt.org/feed/telephony#github.com/openwrt/telephony#' feeds.conf.default
+
+          echo "src-git passwall2 ${{ env.PACKAGE_REPO }}" >> feeds.conf.default
+          echo "src-git passwall_packages ${{ env.DEPENDS_REPO }}" >> feeds.conf.default
+
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Enable luci-app-passwall2
+        run: |
+          cd sdk
+          echo "CONFIG_PACKAGE_luci-app-passwall2=m" > .config
+          make defconfig
+
+      - name: Build PassWall2
+        run: |
+          cd sdk
+          make package/luci-app-passwall2/{clean,compile} -j$(nproc) V=s
+          mkdir ../output
+          find bin/packages/ -name "*passwall2*.ipk" -exec cp {} ../output \;
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: PassWall2 Filogic ${{ env.TAG_NAME }}
+          files: output/*.ipk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
